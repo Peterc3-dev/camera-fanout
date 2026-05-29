@@ -1,0 +1,8 @@
+# Editor / OS cruft
+*~
+*.swp
+.DS_Store
+
+# Runtime artifacts (created under /tmp at runtime, but ignore any local copies)
+*.pid
+*.log
