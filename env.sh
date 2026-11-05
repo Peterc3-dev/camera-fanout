@@ -5,14 +5,39 @@
 # /dev/video{10,11,12}, override with FANOUT_VCAMS="dev1 dev2 ...").
 # If fanout is not running, falls back to FANOUT_REAL_CAM (default /dev/video0).
 #
-# Runtime files (pidfile, claim locks) live in FANOUT_RUN_DIR, which defaults
-# to ${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-<uid>.  fanout.sh uses the same rule.
+# Runtime files (pidfile, claim locks) live in the directory chosen by
+# _fanout_resolve_run_dir below (FANOUT_RUN_DIR, XDG_RUNTIME_DIR, /run/user/<uid>,
+# then /tmp).  fanout.sh uses the same rule.
 #
 # Usage in tool start.sh:
 #   source ~/tools/camera-fanout/env.sh
 #   # then use $VCAM_DEVICE or $VCAM_INDEX
 
-_fanout_run_dir="${FANOUT_RUN_DIR:-${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-$(id -u)}"
+# Runtime-dir resolution.  Kept byte-identical in env.sh and fanout.sh (env.sh
+# is sourced from arbitrary tools, so it cannot reliably locate a shared helper
+# file); change both together.  Order: FANOUT_RUN_DIR; else
+# $XDG_RUNTIME_DIR/camera-fanout-<uid>; else /run/user/<uid>/camera-fanout-<uid>
+# when /run/user/<uid> is a real directory owned by this user (cron and system
+# units often lack XDG_RUNTIME_DIR); else /tmp/camera-fanout-<uid>.
+# FANOUT_TEST_RUN_USER_BASE replaces /run/user and exists only for tests.
+_fanout_resolve_run_dir() {
+    local uid base
+    uid=$(id -u)
+    if [ -n "${FANOUT_RUN_DIR:-}" ]; then
+        printf '%s\n' "$FANOUT_RUN_DIR"
+    elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        printf '%s\n' "$XDG_RUNTIME_DIR/camera-fanout-$uid"
+    else
+        base="${FANOUT_TEST_RUN_USER_BASE:-/run/user}/$uid"
+        if [ -d "$base" ] && [ ! -L "$base" ] && [ -O "$base" ]; then
+            printf '%s\n' "$base/camera-fanout-$uid"
+        else
+            printf '%s\n' "/tmp/camera-fanout-$uid"
+        fi
+    fi
+}
+
+_fanout_run_dir="$(_fanout_resolve_run_dir)"
 _fanout_pidfile="$_fanout_run_dir/camera-fanout.pid"
 
 _fanout_running() {

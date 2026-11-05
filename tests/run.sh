@@ -148,5 +148,29 @@ check "stop without flock exits 0" "0" "$rc"
 check "stop without flock cleans" "absent" "$([ -e "$FANOUT_RUN_DIR/vcam-claim-video12" ] && echo present || echo absent)"
 check "stop without flock warns" yes "$(grep -q 'flock not found' "$SCRATCH/stop.err" && echo yes || echo no)"
 
+# 14. Runtime-dir resolution: with XDG_RUNTIME_DIR unset, both scripts use an
+# owned /run/user/<uid> (faked via FANOUT_TEST_RUN_USER_BASE) and agree.
+uid=$(id -u)
+mkdir -p -m 700 "$SCRATCH/runuser/$uid"
+want="$SCRATCH/runuser/$uid/camera-fanout-$uid"
+env -u FANOUT_RUN_DIR -u XDG_RUNTIME_DIR FANOUT_TEST_RUN_USER_BASE="$SCRATCH/runuser" \
+    PATH="$SCRATCH/nobin" bash "$HERE/fanout.sh" status >/dev/null 2>&1
+check "fanout.sh uses /run/user/<uid> without XDG" "present" "$([ -d "$want" ] && echo present || echo absent)"
+out=$(env -u FANOUT_RUN_DIR -u XDG_RUNTIME_DIR FANOUT_TEST_RUN_USER_BASE="$SCRATCH/runuser" \
+    bash -c "source '$HERE/env.sh'; echo \$_fanout_run_dir")
+check "env.sh matches fanout.sh without XDG" "$want" "$out"
+out=$(env -u FANOUT_RUN_DIR XDG_RUNTIME_DIR="$SCRATCH/xdg" FANOUT_TEST_RUN_USER_BASE="$SCRATCH/runuser" \
+    bash -c "source '$HERE/env.sh'; echo \$_fanout_run_dir")
+check "XDG_RUNTIME_DIR wins over /run/user" "$SCRATCH/xdg/camera-fanout-$uid" "$out"
+out=$(env -u FANOUT_RUN_DIR -u XDG_RUNTIME_DIR FANOUT_TEST_RUN_USER_BASE="$SCRATCH/missing" \
+    bash -c "source '$HERE/env.sh'; echo \$_fanout_run_dir")
+check "no /run/user/<uid> falls back to /tmp" "/tmp/camera-fanout-$uid" "$out"
+mkdir -p "$SCRATCH/linkuser"; ln -s "$SCRATCH/runuser/$uid" "$SCRATCH/linkuser/$uid"
+out=$(env -u FANOUT_RUN_DIR -u XDG_RUNTIME_DIR FANOUT_TEST_RUN_USER_BASE="$SCRATCH/linkuser" \
+    bash -c "source '$HERE/env.sh'; echo \$_fanout_run_dir")
+check "symlinked /run/user/<uid> ignored" "/tmp/camera-fanout-$uid" "$out"
+check "resolver identical in both scripts" yes \
+    "$(diff <(sed -n '/^_fanout_resolve_run_dir()/,/^}/p' "$HERE/env.sh") <(sed -n '/^_fanout_resolve_run_dir()/,/^}/p' "$HERE/fanout.sh") >/dev/null && echo yes || echo no)"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

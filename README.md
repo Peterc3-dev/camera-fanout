@@ -42,7 +42,10 @@ If the devices come up at different numbers, set `FANOUT_VCAMS` (space-separated
 Environment overrides (read by both `fanout.sh` and `env.sh` where relevant):
 `FANOUT_REAL_CAM`, `FANOUT_VCAMS`, `FANOUT_WIDTH`, `FANOUT_HEIGHT`, `FANOUT_FPS`,
 `FANOUT_RUN_DIR`, and `FANOUT_LOCK_TIMEOUT`. Runtime files (pidfile, log, claim locks) live in
-`${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-<uid>` by default. Claim locks whose
+`FANOUT_RUN_DIR` if set, else `$XDG_RUNTIME_DIR/camera-fanout-<uid>`, else
+`/run/user/<uid>/camera-fanout-<uid>` when that user-owned directory exists (so tools
+started from cron or system units still find a desktop-started fanout), else
+`/tmp/camera-fanout-<uid>`. Claim locks whose
 owning process has died are reclaimed automatically, and `stop` only removes
 locks of dead claimants.
 

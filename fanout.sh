@@ -16,11 +16,35 @@ set -euo pipefail
 #   FANOUT_REAL_CAM  source camera            (default /dev/video0)
 #   FANOUT_VCAMS     space-separated sinks    (default /dev/video10 /dev/video11 /dev/video12)
 #   FANOUT_WIDTH / FANOUT_HEIGHT / FANOUT_FPS (default 640 / 480 / 30)
-#   FANOUT_RUN_DIR   pid/log/lock directory   (default ${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-<uid>)
+#   FANOUT_RUN_DIR   pid/log/lock directory   (default: see _fanout_resolve_run_dir)
 # env.sh reads the same FANOUT_VCAMS / FANOUT_RUN_DIR, so export them for both.
+# Runtime-dir resolution.  Kept byte-identical in env.sh and fanout.sh (env.sh
+# is sourced from arbitrary tools, so it cannot reliably locate a shared helper
+# file); change both together.  Order: FANOUT_RUN_DIR; else
+# $XDG_RUNTIME_DIR/camera-fanout-<uid>; else /run/user/<uid>/camera-fanout-<uid>
+# when /run/user/<uid> is a real directory owned by this user (cron and system
+# units often lack XDG_RUNTIME_DIR); else /tmp/camera-fanout-<uid>.
+# FANOUT_TEST_RUN_USER_BASE replaces /run/user and exists only for tests.
+_fanout_resolve_run_dir() {
+    local uid base
+    uid=$(id -u)
+    if [ -n "${FANOUT_RUN_DIR:-}" ]; then
+        printf '%s\n' "$FANOUT_RUN_DIR"
+    elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        printf '%s\n' "$XDG_RUNTIME_DIR/camera-fanout-$uid"
+    else
+        base="${FANOUT_TEST_RUN_USER_BASE:-/run/user}/$uid"
+        if [ -d "$base" ] && [ ! -L "$base" ] && [ -O "$base" ]; then
+            printf '%s\n' "$base/camera-fanout-$uid"
+        else
+            printf '%s\n' "/tmp/camera-fanout-$uid"
+        fi
+    fi
+}
+
 REAL_CAM="${FANOUT_REAL_CAM:-/dev/video0}"
 read -r -a VCAMS <<< "${FANOUT_VCAMS:-/dev/video10 /dev/video11 /dev/video12}"
-RUN_DIR="${FANOUT_RUN_DIR:-${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-$(id -u)}"
+RUN_DIR="$(_fanout_resolve_run_dir)"
 PIDFILE="$RUN_DIR/camera-fanout.pid"
 LOGFILE="$RUN_DIR/camera-fanout.log"
 
