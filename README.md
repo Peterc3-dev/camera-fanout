@@ -37,7 +37,16 @@ are likewise hardcoded and assume `v4l2loopback` is configured to create
 
 `v4l2loopback` should be configured to create three devices at `/dev/video10`,
 `/dev/video11`, and `/dev/video12` (typically via `/etc/modprobe.d/v4l2loopback.conf`).
-If the devices come up at different numbers, edit the `VCAMS` array in `fanout.sh`.
+If the devices come up at different numbers, set `FANOUT_VCAMS` (space-separated).
+
+Environment overrides (read by both `fanout.sh` and `env.sh` where relevant):
+`FANOUT_REAL_CAM`, `FANOUT_VCAMS`, `FANOUT_WIDTH`, `FANOUT_HEIGHT`, `FANOUT_FPS`,
+and `FANOUT_RUN_DIR`. Runtime files (pidfile, log, claim locks) live in
+`${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-<uid>` by default. Claim locks whose
+owning process has died are reclaimed automatically, and `stop` only removes
+locks of dead claimants.
+
+Run `tests/run.sh` to exercise the claim logic without a camera.
 
 ## Usage
 

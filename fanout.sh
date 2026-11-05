@@ -12,16 +12,23 @@
 
 set -euo pipefail
 
-REAL_CAM="/dev/video0"
-VCAMS=(/dev/video10 /dev/video11 /dev/video12)
-PIDFILE="/tmp/camera-fanout.pid"
-LOGFILE="/tmp/camera-fanout.log"
+# Overridable via environment:
+#   FANOUT_REAL_CAM  source camera            (default /dev/video0)
+#   FANOUT_VCAMS     space-separated sinks    (default /dev/video10 /dev/video11 /dev/video12)
+#   FANOUT_WIDTH / FANOUT_HEIGHT / FANOUT_FPS (default 640 / 480 / 30)
+#   FANOUT_RUN_DIR   pid/log/lock directory   (default ${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-<uid>)
+# env.sh reads the same FANOUT_VCAMS / FANOUT_RUN_DIR, so export them for both.
+REAL_CAM="${FANOUT_REAL_CAM:-/dev/video0}"
+read -r -a VCAMS <<< "${FANOUT_VCAMS:-/dev/video10 /dev/video11 /dev/video12}"
+RUN_DIR="${FANOUT_RUN_DIR:-${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-$(id -u)}"
+PIDFILE="$RUN_DIR/camera-fanout.pid"
+LOGFILE="$RUN_DIR/camera-fanout.log"
 
 # Resolution and framerate for the fanout.  640x480@30 is a good balance:
 # fast enough for ML tools, low CPU overhead for 3-way tee.
-WIDTH=640
-HEIGHT=480
-FPS=30
+WIDTH="${FANOUT_WIDTH:-640}"
+HEIGHT="${FANOUT_HEIGHT:-480}"
+FPS="${FANOUT_FPS:-30}"
 
 GREEN=$'\e[38;2;80;255;130m'
 DIM=$'\e[38;2;120;220;160m'
@@ -30,6 +37,16 @@ RESET=$'\e[0m'
 
 log() { printf '%s[fanout]%s %s\n' "$GREEN" "$RESET" "$*"; }
 err() { printf '%s[fanout]%s %s\n' "$RED" "$RESET" "$*" >&2; }
+
+# Private per-user runtime dir.  Refuse a pre-existing dir owned by someone else
+# (relevant for the /tmp fallback, which is world-writable).
+ensure_run_dir() {
+    mkdir -p -m 700 "$RUN_DIR"
+    if [ ! -O "$RUN_DIR" ] || [ -L "$RUN_DIR" ]; then
+        err "$RUN_DIR is not a directory owned by $(id -un); refusing to use it"
+        exit 1
+    fi
+}
 
 load_module() {
     if ! grep -q v4l2loopback /proc/modules 2>/dev/null; then
@@ -73,14 +90,22 @@ stop_fanout() {
         rm -f "$PIDFILE"
     else
         # Also try to find by process name
-        if pkill -f "^ffmpeg .*-f v4l2 /dev/video10( |$)" 2>/dev/null; then
+        if pkill -f "^ffmpeg .*-f v4l2 ${VCAMS[0]}( |$)" 2>/dev/null; then
             log "Killed stray ffmpeg fanout process."
         else
             log "No fanout running."
         fi
     fi
-    # Clean up virtual-camera claim locks
-    rm -f /tmp/vcam-claim-video1{0,1,2} 2>/dev/null
+    # Clean up virtual-camera claim locks, but only those whose claimant is
+    # gone: a tool still holding a device keeps its claim across a restart.
+    local lock owner
+    for lock in "$RUN_DIR"/vcam-claim-*; do
+        [ -e "$lock" ] || continue
+        owner=$(cat "$lock" 2>/dev/null || true)
+        if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
+            rm -f "$lock"
+        fi
+    done
 }
 
 show_status() {
@@ -101,6 +126,11 @@ show_status() {
 
     echo
     log "Video devices:"
+    if ! command -v v4l2-ctl >/dev/null 2>&1; then
+        printf '  %sv4l2-ctl not installed (v4l-utils); cannot list devices%s\n' "$RED" "$RESET"
+        echo
+        return 0
+    fi
     v4l2-ctl --list-devices 2>&1 | while IFS= read -r line; do
         printf '  %s%s%s\n' "$DIM" "$line" "$RESET"
     done
@@ -165,7 +195,7 @@ start_fanout() {
     if kill -0 "$pid" 2>/dev/null; then
         log "Fanout started (PID $pid)"
         notify-send -a "Camera Fanout" \
-            "Fanout active: $REAL_CAM -> 3 virtual cameras" 2>/dev/null || true
+            "Fanout active: $REAL_CAM -> ${#VCAMS[@]} virtual cameras" 2>/dev/null || true
     else
         err "ffmpeg exited immediately. Check $LOGFILE"
         rm -f "$PIDFILE"
@@ -173,6 +203,8 @@ start_fanout() {
         exit 1
     fi
 }
+
+ensure_run_dir
 
 case "${1:-start}" in
     start)  start_fanout ;;
