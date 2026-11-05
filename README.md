@@ -41,10 +41,18 @@ If the devices come up at different numbers, set `FANOUT_VCAMS` (space-separated
 
 Environment overrides (read by both `fanout.sh` and `env.sh` where relevant):
 `FANOUT_REAL_CAM`, `FANOUT_VCAMS`, `FANOUT_WIDTH`, `FANOUT_HEIGHT`, `FANOUT_FPS`,
-and `FANOUT_RUN_DIR`. Runtime files (pidfile, log, claim locks) live in
+`FANOUT_RUN_DIR`, and `FANOUT_LOCK_TIMEOUT`. Runtime files (pidfile, log, claim locks) live in
 `${XDG_RUNTIME_DIR:-/tmp}/camera-fanout-<uid>` by default. Claim locks whose
 owning process has died are reclaimed automatically, and `stop` only removes
 locks of dead claimants.
+
+### Claim lock
+
+`env.sh` and `fanout.sh stop` share a lock file, `claim.lock`, in `FANOUT_RUN_DIR`. It uses `flock(1)` from util-linux. `env.sh` holds it while it checks and claims a virtual device, so two tools cannot grab the same one. `stop` holds it while it removes dead claims, so it cannot delete a fresh claim.
+
+`FANOUT_LOCK_TIMEOUT` is how long to wait for the lock, in seconds. Default 2.
+
+The lock is best effort. If `flock` is missing, `claim.lock` cannot be opened, or the wait times out, the script prints a warning to stderr and goes on without the lock. `env.sh` then claims unlocked, which has a narrow race. `stop` leaves its claim cleanup undone on timeout. `env.sh` reclaims stale claims later.
 
 Run `tests/run.sh` to exercise the claim logic without a camera.
 
