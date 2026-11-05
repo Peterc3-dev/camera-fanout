@@ -127,5 +127,26 @@ out=$(PATH="$SCRATCH/noflock" bash -c "source '$HERE/env.sh'; echo \$VCAM_DEVICE
 check "no flock: still claims" "/dev/video10" "$out"
 check "no flock: warns" yes "$(grep -q 'flock not found' "$SCRATCH/noflock.err" && echo yes || echo no)"
 
+# 13. fanout.sh stop honours claim.lock: skips cleanup on timeout, cleans
+# after the holder releases, and still cleans when flock is missing.
+rm -f "$FANOUT_RUN_DIR/camera-fanout.pid"
+echo 999999 > "$FANOUT_RUN_DIR/vcam-claim-video12"
+flock "$FANOUT_RUN_DIR/claim.lock" sleep 1 & HOLD=$!
+sleep 0.2
+FANOUT_LOCK_TIMEOUT=0.2 bash "$HERE/fanout.sh" stop >/dev/null 2>"$SCRATCH/stop.err"; rc=$?
+check "stop under held lock exits 0" "0" "$rc"
+check "stop under held lock leaves claims" "present" "$([ -e "$FANOUT_RUN_DIR/vcam-claim-video12" ] && echo present || echo absent)"
+check "stop under held lock warns" yes "$(grep -q 'timed out' "$SCRATCH/stop.err" && echo yes || echo no)"
+wait "$HOLD"
+bash "$HERE/fanout.sh" stop >/dev/null 2>&1
+check "stop cleans once lock free" "absent" "$([ -e "$FANOUT_RUN_DIR/vcam-claim-video12" ] && echo present || echo absent)"
+echo 999999 > "$FANOUT_RUN_DIR/vcam-claim-video12"
+for t in rm seq sleep mkdir dirname printf grep; do ln -sf "$(command -v $t)" "$SCRATCH/noflock/$t"; done
+ln -sf "$SCRATCH/bin/pkill" "$SCRATCH/noflock/pkill"
+PATH="$SCRATCH/noflock" bash "$HERE/fanout.sh" stop >/dev/null 2>"$SCRATCH/stop.err"; rc=$?
+check "stop without flock exits 0" "0" "$rc"
+check "stop without flock cleans" "absent" "$([ -e "$FANOUT_RUN_DIR/vcam-claim-video12" ] && echo present || echo absent)"
+check "stop without flock warns" yes "$(grep -q 'flock not found' "$SCRATCH/stop.err" && echo yes || echo no)"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

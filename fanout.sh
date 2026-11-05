@@ -98,6 +98,25 @@ stop_fanout() {
     fi
     # Clean up virtual-camera claim locks, but only those whose claimant is
     # gone: a tool still holding a device keeps its claim across a restart.
+    # Hold claim.lock (shared with env.sh) so a tool reclaiming a stale claim
+    # at the same moment cannot have its fresh claim removed here.
+    local fd=""
+    if ! command -v flock >/dev/null 2>&1; then
+        err "flock not found (util-linux); cleaning claim locks without serialisation"
+    elif ! { exec {fd}>>"$RUN_DIR/claim.lock"; } 2>/dev/null; then
+        err "cannot open $RUN_DIR/claim.lock; cleaning claim locks without serialisation"
+        fd=""
+    elif ! flock -w "${FANOUT_LOCK_TIMEOUT:-2}" "$fd"; then
+        # A stale claim left behind is harmless: env.sh reclaims it.
+        err "timed out waiting for claim.lock; leaving claim locks for env.sh to reclaim"
+        exec {fd}>&-
+        return 0
+    fi
+    clean_claims
+    if [ -n "$fd" ]; then exec {fd}>&-; fi
+}
+
+clean_claims() {
     local lock owner
     for lock in "$RUN_DIR"/vcam-claim-*; do
         [ -e "$lock" ] || continue
