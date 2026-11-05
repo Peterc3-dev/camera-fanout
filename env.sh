@@ -23,7 +23,9 @@ if _fanout_running; then
             export VCAM_INDEX="${_dev##/dev/video}"
             _claimed=true
             # Clean up lock on exit
-            trap "rm -f '$_lock' 2>/dev/null" EXIT
+            # Chain onto any existing EXIT trap instead of replacing it
+            _prev_exit_trap=$(trap -p EXIT | sed "s/^trap -- '\\(.*\\)' EXIT$/\\1/; s/'\\\\''/'/g")
+            trap "rm -f '$_lock' 2>/dev/null${_prev_exit_trap:+; $_prev_exit_trap}" EXIT
             break
         fi
     done

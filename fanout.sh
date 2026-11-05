@@ -73,7 +73,7 @@ stop_fanout() {
         rm -f "$PIDFILE"
     else
         # Also try to find by process name
-        if pkill -f "ffmpeg.*v4l2loopback\|ffmpeg.*video10" 2>/dev/null; then
+        if pkill -f "^ffmpeg .*-f v4l2 /dev/video10( |$)" 2>/dev/null; then
             log "Killed stray ffmpeg fanout process."
         else
             log "No fanout running."
