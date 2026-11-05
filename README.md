@@ -63,4 +63,11 @@ source /path/to/camera-fanout/env.sh
   copies); there is no per-device transcoding.
 - `env.sh` claims at most three devices; once all three are taken it falls back to sharing
   `/dev/video10`.
+- `env.sh` adds its lock cleanup to any `EXIT` trap your shell already has. It does not
+  replace it. Your existing trap still runs, after the lock file is removed.
+- `fanout.sh stop` first uses the PID file. If there is no PID file, it falls back to
+  `pkill -f "^ffmpeg .*-f v4l2 /dev/video10( |$)"`. This assumes ffmpeg was started as
+  bare `ffmpeg` (not a full path like `/usr/bin/ffmpeg`, and not through a wrapper), with
+  `-f v4l2 /dev/video10` among its outputs. `fanout.sh` starts it that way. An ffmpeg
+  started some other way will not be matched, and you must stop it by hand.
 - Uses `notify-send` for a desktop notification on start if available (optional).
