@@ -84,5 +84,48 @@ mkdir -p "$SCRATCH/nobin"; for t in bash cat grep id mkdir dirname printf; do ln
 PATH="$SCRATCH/nobin" bash "$HERE/fanout.sh" status >/dev/null 2>&1; rc=$?
 check "status without v4l2-ctl exits 0" "0" "$rc"
 
+# 11. Claimants racing for the same stale lock: exactly one wins.  Each waits
+# on a barrier file so they hit the reclaim path together; repeat a few rounds.
+echo "$FAKE_PID" > "$FANOUT_RUN_DIR/camera-fanout.pid"   # test 9 removed it
+race_round() { # n
+    local n="$1" i dead winners
+    sleep 0.01 & dead=$!; wait "$dead" 2>/dev/null
+    echo "$dead" > "$FANOUT_RUN_DIR/vcam-claim-video10"
+    rm -f "$SCRATCH/go" "$SCRATCH"/race.*
+    for i in $(seq 1 "$n"); do
+        FANOUT_VCAMS=/dev/video10 bash -c "
+            while [ ! -e '$SCRATCH/go' ]; do :; done
+            source '$HERE/env.sh'
+            if [ \"\$(cat '$FANOUT_RUN_DIR/vcam-claim-video10' 2>/dev/null)\" = \$\$ ]; then echo won; else echo lost; fi
+            sleep 1" > "$SCRATCH/race.$i" 2>/dev/null &
+    done
+    sleep 0.3; touch "$SCRATCH/go"; wait
+    winners=$(cat "$SCRATCH"/race.* | grep -c '^won$')
+    echo "$winners"
+}
+race_ok=yes
+for r in 1 2 3 4 5; do w=$(race_round 6); [ "$w" = 1 ] || { race_ok="no (round $r: $w winners)"; break; }; done
+check "stale-lock race has exactly one winner" yes "$race_ok"
+rm -f "$FANOUT_RUN_DIR"/vcam-claim-*
+
+# 11b. Claiming actually waits on claim.lock (the race above is too narrow to
+# reproduce reliably unlocked, so prove serialisation directly).
+sleep 0.01 & dead=$!; wait "$dead" 2>/dev/null
+echo "$dead" > "$FANOUT_RUN_DIR/vcam-claim-video10"
+flock "$FANOUT_RUN_DIR/claim.lock" sleep 1 & HOLD=$!
+sleep 0.2
+FANOUT_VCAMS=/dev/video10 FANOUT_LOCK_TIMEOUT=5 bash -c "source '$HERE/env.sh'; sleep 1.5" & CL=$!
+sleep 0.4
+check "claim waits while claim.lock held" "$dead" "$(cat "$FANOUT_RUN_DIR/vcam-claim-video10")"
+wait "$HOLD"; sleep 0.3
+check "claim proceeds once claim.lock released" "$CL" "$(cat "$FANOUT_RUN_DIR/vcam-claim-video10")"
+wait "$CL"; rm -f "$FANOUT_RUN_DIR"/vcam-claim-*
+
+# 12. Missing flock: claim still works, with a warning
+mkdir -p "$SCRATCH/noflock"; for t in bash cat id basename sed; do ln -sf "$(command -v $t)" "$SCRATCH/noflock/$t"; done
+out=$(PATH="$SCRATCH/noflock" bash -c "source '$HERE/env.sh'; echo \$VCAM_DEVICE" 2>"$SCRATCH/noflock.err")
+check "no flock: still claims" "/dev/video10" "$out"
+check "no flock: warns" yes "$(grep -q 'flock not found' "$SCRATCH/noflock.err" && echo yes || echo no)"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

@@ -19,8 +19,35 @@ _fanout_running() {
     [ -f "$_fanout_pidfile" ] && kill -0 "$(cat "$_fanout_pidfile" 2>/dev/null)" 2>/dev/null
 }
 
+# Serialise check-and-claim / stale-reclaim across tools with flock(1) on
+# $_fanout_run_dir/claim.lock (fanout.sh stop takes the same lock).  Waits up
+# to FANOUT_LOCK_TIMEOUT seconds (default 2).  If flock is missing or the wait
+# times out, warn and fall back to the unlocked (narrowly racy) claim.
+_fanout_claim_locked() {
+    local fd rc
+    if ! command -v flock >/dev/null 2>&1; then
+        echo "camera-fanout: flock not found (util-linux); claiming without serialisation" >&2
+        _fanout_claim "$@"
+        return
+    fi
+    if ! { exec {fd}>>"$_fanout_run_dir/claim.lock"; } 2>/dev/null; then
+        echo "camera-fanout: cannot open $_fanout_run_dir/claim.lock; claiming without serialisation" >&2
+        _fanout_claim "$@"
+        return
+    fi
+    if flock -w "${FANOUT_LOCK_TIMEOUT:-2}" "$fd"; then
+        _fanout_claim "$@"; rc=$?
+    else
+        echo "camera-fanout: timed out waiting for claim.lock; claiming without serialisation" >&2
+        _fanout_claim "$@"; rc=$?
+    fi
+    exec {fd}>&-
+    return "$rc"
+}
+
 # Try to claim lockfile $1 for this shell ($$).  A lock whose recorded PID is
 # no longer alive (claimant crashed or was SIGKILLed) is reclaimed once.
+# Callers should go through _fanout_claim_locked.
 _fanout_claim() {
     local lock="$1" owner
     if (set -C; echo $$ > "$lock") 2>/dev/null; then
@@ -30,8 +57,8 @@ _fanout_claim() {
     if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
         return 1
     fi
-    # Stale lock.  Re-check the content right before removing it to narrow the
-    # window in which another claimant could have reclaimed it first.
+    # Stale lock.  Under claim.lock no other claimant can interleave here; the
+    # re-check below still narrows the window in the unlocked fallback.
     [ "$(cat "$lock" 2>/dev/null)" = "$owner" ] || return 1
     rm -f "$lock" 2>/dev/null
     (set -C; echo $$ > "$lock") 2>/dev/null
@@ -42,7 +69,7 @@ if _fanout_running; then
     _claimed=false
     for _dev in ${FANOUT_VCAMS:-/dev/video10 /dev/video11 /dev/video12}; do
         _lock="$_fanout_run_dir/vcam-claim-$(basename "$_dev")"
-        if _fanout_claim "$_lock"; then
+        if _fanout_claim_locked "$_lock"; then
             export VCAM_DEVICE="$_dev"
             export VCAM_INDEX="${_dev##/dev/video}"
             _claimed=true
